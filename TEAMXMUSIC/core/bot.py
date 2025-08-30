@@ -1,53 +1,70 @@
+import asyncio
+import os
+import sys
 from pyrogram import Client, errors
-from pyrogram.enums import ChatMemberStatus, ParseMode
+from pyrogram.enums import ChatMemberStatus
 
 import config
-
 from ..logging import LOGGER
 
 
 class TEAMX(Client):
     def __init__(self):
-        LOGGER(__name__).info(f"Starting Bot...")
         super().__init__(
             name="TEAMXMUSIC",
             api_id=config.API_ID,
             api_hash=config.API_HASH,
             bot_token=config.BOT_TOKEN,
             in_memory=True,
+            workers=30,
             max_concurrent_transmissions=7,
         )
+        LOGGER(__name__).info("Bot client initialized.")
+
+    async def _auto_restart(self):
+        interval = getattr(config, "RESTART_INTERVAL", 86400)  # fallback 24 hours
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                await self.disconnect()
+                await self.start()
+                LOGGER(__name__).info("🔄 Pyrogram session auto-restarted successfully.")
+            except Exception as exc:
+                LOGGER(__name__).warning(f"Auto-restart failed: {exc}")
 
     async def start(self):
         await super().start()
-        self.id = self.me.id
-        self.name = self.me.first_name + " " + (self.me.last_name or "")
-        self.username = self.me.username
-        self.mention = self.me.mention
+        asyncio.create_task(self._auto_restart())
+
+        me = await self.get_me()
+        self.username, self.id = me.username, me.id
+        self.name = f"{me.first_name} {me.last_name or ''}".strip()
+        self.mention = me.mention
 
         try:
             await self.send_message(
-                chat_id=config.LOGGER_ID,
-                text=f"<u><b>» {self.mention} ʙᴏᴛ sᴛᴀʀᴛᴇᴅ :</b><u>\n\nɪᴅ : <code>{self.id}</code>\nɴᴀᴍᴇ : {self.name}\nᴜsᴇʀɴᴀᴍᴇ : @{self.username}",
+                config.LOGGER_ID,
+                (
+                    f"<u><b>» {self.mention} ʙᴏᴛ sᴛᴀʀᴛᴇᴅ :</b></u>\n\n"
+                    f"ɪᴅ : <code>{self.id}</code>\n"
+                    f"ɴᴀᴍᴇ : {self.name}\n"
+                    f"ᴜsᴇʀɴᴀᴍᴇ : @{self.username}"
+                ),
             )
         except (errors.ChannelInvalid, errors.PeerIdInvalid):
-            LOGGER(__name__).error(
-                "Bot has failed to access the log group/channel. Make sure that you have added your bot to your log group/channel."
-            )
-            exit()
-        except Exception as ex:
-            LOGGER(__name__).error(
-                f"Bot has failed to access the log group/channel.\n  Reason : {type(ex).__name__}."
-            )
-            exit()
+            LOGGER(__name__).error("❌ Bot cannot access the log group/channel – add & promote it first!")
+            sys.exit()
+        except Exception as exc:
+            LOGGER(__name__).error(f"❌ Failed to send startup message.\nReason: {type(exc).__name__}")
+            sys.exit()
 
-        a = await self.get_chat_member(config.LOGGER_ID, self.id)
-        if a.status != ChatMemberStatus.ADMINISTRATOR:
-            LOGGER(__name__).error(
-                "Please promote your bot as an admin in your log group/channel."
-            )
-            exit()
-        LOGGER(__name__).info(f"Music Bot Started as {self.name}")
+        try:
+            member = await self.get_chat_member(config.LOGGER_ID, self.id)
+            if member.status != ChatMemberStatus.ADMINISTRATOR:
+                LOGGER(__name__).error("❌ Promote the bot as admin in the log group/channel.")
+                sys.exit()
+        except Exception as e:
+            LOGGER(__name__).error(f"❌ Could not check admin status: {e}")
+            sys.exit()
 
-    async def stop(self):
-        await super().stop()
+        LOGGER(__name__).info(f"✅ Music Bot started as {self.name} (@{self.username})")
